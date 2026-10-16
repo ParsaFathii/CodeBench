@@ -1,0 +1,174 @@
+// CodeBench — Prisma schema
+// SQLite storage for experiments, runs, per-benchmark results (including raw
+// observations), environment snapshots, AI analyses and generated reports.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Experiments — reproducible benchmark definitions
+// ---------------------------------------------------------------------------
+model Experiment {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  // JSON ExperimentConfig: algorithms, languages, sizes, datasetType, seed,
+  // warmup, repetitions, timeoutMs, benchmarkMode, includeStdlib, continueOnError
+  config      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  runs        Run[]
+
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Runs — one execution of an experiment
+// ---------------------------------------------------------------------------
+model Run {
+  id            String    @id @default(cuid())
+  experimentId  String
+  experiment    Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  status        String    @default("QUEUED") // QUEUED|PREPARING|RUNNING|VERIFYING|ANALYZING|COMPLETED|FAILED|CANCELLED
+  progress      Int       @default(0) // 0..100, derived from completedJobs/totalJobs
+  totalJobs     Int       @default(0)
+  completedJobs Int       @default(0)
+  failedJobs    Int       @default(0)
+  currentJob    String?
+  commitSha     String?
+  envSnapshotId String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  error         String?
+  createdAt     DateTime  @default(now())
+  results       BenchmarkResult[]
+  logs          RunLog[]
+  aiAnalyses    AiAnalysis[]
+  reports       Report[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// RunLog — live console lines emitted during execution
+// ---------------------------------------------------------------------------
+model RunLog {
+  id      String   @id @default(cuid())
+  runId   String
+  run     Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ts      DateTime @default(now())
+  level   String   @default("info") // info|success|warn|error|debug
+  message String
+
+  @@index([runId, ts])
+}
+
+// ---------------------------------------------------------------------------
+// BenchmarkResult — normalized result of one (algorithm, variant, language, size) job
+// ---------------------------------------------------------------------------
+model BenchmarkResult {
+  id                 String   @id @default(cuid())
+  runId              String
+  run                Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  algorithmId        String // e.g. "sorting"
+  algorithmName      String
+  variantId          String // e.g. "merge_sort"
+  variantName        String
+  category           String // hand-written | standard-library
+  language           String // cpp | java | python
+  datasetType        String // random_int | sorted | ...
+  inputSize          Int
+  seed               Int
+  harness            String // google-benchmark | jmh | pyperf
+  harnessVersion     String?
+  benchmarkMode      String // avgt (ns/op)
+  warmupIterations   Int      @default(0)
+  measuredRepetitions Int    @default(0)
+  verificationStatus String   @default("PENDING") // PASSED|FAILED|SKIPPED
+  inputChecksumHex   String? // FNV-1a 64 of the canonical measured input
+  casesJson          String? // JSON — fixed verify-case output checksums from the engine
+  jobChecksumHex     String? // FNV-1a 64 of the canonical output on the measured input
+  refMatch           Boolean? // fixed verify cases match the TypeScript reference
+  crossLangMatch     Boolean  @default(false)
+  observations        String   @default("[]") // JSON number[] — raw ns/op per repetition
+  statsJson          String? // JSON Stats — deterministic summary from observations
+  rawOutput          String? // raw harness output (JSON from GB/JMH/pyperf), kept for audit
+  envJson            String? // JSON — per-job runtime metadata (compiler, VM, interpreter…)
+  extraMetricsJson   String? // JSON — e.g. JMH gc.alloc.rate.norm (B/op), labelled by method
+  warnings           String?
+  durationMs         Int?
+  status             String   @default("COMPLETED") // COMPLETED | FAILED | TIMEOUT
+  error              String?
+  createdAt          DateTime @default(now())
+
+  @@index([runId, algorithmId, variantId])
+  @@index([language, algorithmId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// EnvSnapshot — machine/runtime metadata for a run
+// ---------------------------------------------------------------------------
+model EnvSnapshot {
+  id            String   @id @default(cuid())
+  capturedAt    DateTime @default(now())
+  osPlatform    String
+  osVersion     String
+  arch          String
+  cpuModel      String?
+  cpuCores      Int?
+  totalMemBytes String?
+  hostRuntime   String?
+  commitSha     String?
+  metadataJson  String // JSON — runtimes, harness versions, isolation policy
+
+  @@index([capturedAt])
+}
+
+// ---------------------------------------------------------------------------
+// AiAnalysis — optional LLM interpretation, strictly separated from measurements
+// ---------------------------------------------------------------------------
+model AiAnalysis {
+  id         String   @id @default(cuid())
+  runId      String
+  run        Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  provider   String // zai | ollama | disabled
+  model      String?
+  status     String   @default("PENDING") // PENDING|COMPLETED|FAILED
+  inputJson  String? // exact evidence payload sent to the model
+  outputJson String? // validated structured output
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([runId])
+}
+
+// ---------------------------------------------------------------------------
+// Report — generated JSON/CSV/Markdown reports
+// ---------------------------------------------------------------------------
+model Report {
+  id        String   @id @default(cuid())
+  runId     String
+  run       Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  format    String // json | csv | markdown
+  filename  String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([runId])
+}
+
+// ---------------------------------------------------------------------------
+// Setting — application settings (key/value JSON)
+// ---------------------------------------------------------------------------
+model Setting {
+  key   String @id
+  value String
+}

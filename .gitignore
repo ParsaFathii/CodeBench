@@ -1,2 +1,63 @@
-skills/
-node_modules/
+# See https://help.github.com/articles/ignoring-files/ for more information about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# CodeBench — local runtime artifacts (never commit)
+# local benchmark toolchain cache (Google Benchmark build, compiled binaries, temp job dirs)
+/.cache/
+# SQLite database (contains run data from this machine; export reports instead)
+/db/
+# dev server log
+dev.log
+server.log
+# agent workspace artifacts
+/tool-results/
+/upload/
+/worklog.md
+# OS junk
+*.swp
+
+# sandbox/infra files not part of the product
+/.zscripts/
+/Caddyfile
+/mini-services/
+__pycache__/
+*.pyc
