@@ -43,7 +43,7 @@ jobs:
       CODEBENCH_JDK_HOME: /tmp/codebench-jdk-21
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python (provides pip; cmake comes from pip)
         uses: actions/setup-python@v5
