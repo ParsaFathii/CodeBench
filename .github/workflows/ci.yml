@@ -81,7 +81,7 @@ jobs:
       # scripts/verify-crosslang.ts and the engine wrappers resolve the JDK
       # through CODEBENCH_JDK_HOME (default /home/z/.jdk exists only in the
       # original sandbox — CI must always set it)
-      CODEBENCH_JDK_HOME: "${{ runner.temp }}/jdk-21"
+      CODEBENCH_JDK_HOME: /tmp/codebench-jdk-21
     steps:
       - name: Checkout
         uses: actions/checkout@v4
