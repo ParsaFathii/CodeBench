@@ -1,0 +1,225 @@
+# CodeBench — benchmark runner smoke test
+#
+# Purpose: prove that every language runner LAUNCHES, executes a small
+# deterministic workload (merge_sort, random_int, size 1000, seed 7), writes
+# its FNV-1a verification sidecar, and emits well-formed result JSON.
+#
+# This is explicitly NOT a performance comparison. GitHub-hosted shared
+# runners have virtualized CPUs, unpredictable neighbouring load and no
+# frequency pinning; their timing is not authoritative. Timings observed in
+# this workflow must never be recorded or compared as performance data — for
+# real measurements run CodeBench on a controlled machine and use the
+# platform's own regression view (docs/BENCHMARK_METHODOLOGY.md).
+#
+# Trigger: pushes to main touching the engines or the scripts, plus manual
+# workflow_dispatch. Runs are serialized (single job, sequential steps, and a
+# non-cancelling concurrency group) for performance isolation.
+
+name: Benchmark smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "engines/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one smoke run at a time; do not cancel an in-flight run
+concurrency:
+  group: "benchmark-smoke"
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: "Launch + verify + emit (cpp, java, python — serially)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # engine wrappers / gate script resolve the JDK through CODEBENCH_JDK_HOME
+      CODEBENCH_JDK_HOME: "${{ runner.temp }}/jdk-21"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python (provides pip; cmake comes from pip)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cmake + pyperf
+        run: python3 -m pip install cmake pyperf
+
+      - name: Install Temurin JDK 21 (Adoptium API)
+        run: |
+          mkdir -p "$CODEBENCH_JDK_HOME"
+          curl -sL --max-time 300 -o /tmp/jdk21.tar.gz \
+            "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"
+          tar -xzf /tmp/jdk21.tar.gz -C "$CODEBENCH_JDK_HOME" --strip-components=1
+          "$CODEBENCH_JDK_HOME/bin/javac" -version
+
+      - name: Build Google Benchmark v1.9.4
+        run: |
+          mkdir -p .cache/benchdeps
+          git clone --depth 1 --branch v1.9.4 https://github.com/google/benchmark.git .cache/benchdeps/benchmark
+          cmake -S .cache/benchdeps/benchmark -B .cache/benchdeps/benchmark/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBENCHMARK_ENABLE_TESTING=OFF \
+            -DBENCHMARK_ENABLE_GTEST_TESTS=OFF \
+            -DBENCHMARK_ENABLE_WERROR=OFF \
+            -DBENCHMARK_USE_LIBCXX=OFF
+          cmake --build .cache/benchdeps/benchmark/build -j"$(nproc)"
+          test -f .cache/benchdeps/benchmark/build/src/libbenchmark.a
+
+      - name: Compile C++ engine
+        run: |
+          mkdir -p .cache/bin
+          g++ -std=c++20 -O2 \
+            -I .cache/benchdeps/benchmark/include \
+            engines/cpp/codebench.cpp \
+            .cache/benchdeps/benchmark/build/src/libbenchmark.a \
+            -lpthread \
+            -o .cache/bin/codebench_cpp
+
+      - name: Compile Java engine (JMH jars are committed in engines/java/lib)
+        run: |
+          mkdir -p .cache/bin/java-classes
+          "$CODEBENCH_JDK_HOME/bin/javac" -proc:full \
+            -cp "engines/java/lib/jmh-core-1.37.jar:engines/java/lib/jmh-generator-annprocess-1.37.jar" \
+            -d .cache/bin/java-classes \
+            engines/java/src/codebench/*.java
+
+      # ---- C++ (Google Benchmark) ------------------------------------------
+      - name: "C++ runner: one tiny timed job (merge_sort, seed 7)"
+        run: |
+          CB_VARIANT=merge_sort CB_DATASET=random_int CB_SIZE=1000 CB_SEED=7 \
+            CB_WARMUP=1 CB_MODE=bench CB_VERIFY_OUT=/tmp/cpp-verify.json \
+            .cache/bin/codebench_cpp \
+              --benchmark_filter='^BM_codebench' \
+              --benchmark_repetitions=2 \
+              --benchmark_min_time=0.02s \
+              --benchmark_format=json \
+              --benchmark_out=/tmp/cpp-out.json
+
+          python3 - <<'PY'
+          import json
+          import math
+
+          with open("/tmp/cpp-verify.json") as f:
+              verify = json.load(f)
+          assert verify.get("input") and verify.get("output") and verify.get("cases"), \
+              f"C++ verification sidecar incomplete: {verify}"
+
+          with open("/tmp/cpp-out.json") as f:
+              out = json.load(f)
+          iterations = [
+              b for b in out.get("benchmarks", [])
+              if b.get("run_type") == "iteration" and not b.get("aggregate_name")
+          ]
+          assert len(iterations) >= 2, \
+              f"expected at least 2 iteration entries, got {len(iterations)}"
+          for entry in iterations:
+              real_time = entry.get("real_time")
+              assert isinstance(real_time, (int, float)) and math.isfinite(real_time) and real_time > 0, \
+                  f"non-finite real_time in entry: {entry}"
+          unit = iterations[0].get("time_unit", "ns")
+          print(f"C++ OK: {len(iterations)} iteration entries, "
+                f"real_time={[round(e['real_time'], 1) for e in iterations]} {unit}/op "
+                f"(shared-runner timing — not performance data)")
+          PY
+
+      # ---- Java (JMH) --------------------------------------------------------
+      - name: "Java runner: verification phase + one minimal JMH job"
+        run: |
+          # verification phase first (plain JVM, no JMH) — same as the coordinator does
+          CB_VARIANT=merge_sort CB_DATASET=random_int CB_SIZE=1000 CB_SEED=7 \
+            CB_VERIFY_OUT=/tmp/java-verify.json \
+            "$CODEBENCH_JDK_HOME/bin/java" \
+              -cp ".cache/bin/java-classes:engines/java/lib/jmh-core-1.37.jar:engines/java/lib/jopt-simple-5.0.4.jar:engines/java/lib/commons-math3-3.6.1.jar" \
+              codebench.VerifyMain
+
+          # minimal timed JMH invocation (1 fork, 1 warmup, 2 measurement iterations)
+          CB_VARIANT=merge_sort CB_DATASET=random_int CB_SIZE=1000 CB_SEED=7 \
+            "$CODEBENCH_JDK_HOME/bin/java" \
+              -cp ".cache/bin/java-classes:engines/java/lib/jmh-core-1.37.jar:engines/java/lib/jopt-simple-5.0.4.jar:engines/java/lib/commons-math3-3.6.1.jar" \
+              org.openjdk.jmh.Main '^codebench\.Benchmarks\.mergeSort$' \
+              -f 1 -wi 1 -i 2 -w 200ms -r 100ms -rf json -rff /tmp/java-jmh.json
+
+          python3 - <<'PY'
+          import json
+          import math
+
+          with open("/tmp/java-verify.json") as f:
+              verify = json.load(f)
+          assert verify.get("input") and verify.get("output") and verify.get("cases"), \
+              f"Java verification sidecar incomplete: {verify}"
+
+          with open("/tmp/java-jmh.json") as f:
+              results = json.load(f)
+          assert results, "empty JMH JSON result"
+          primary = results[0].get("primaryMetric") or {}
+          raw = primary.get("rawData") or []
+          values = [v for row in raw for v in row]
+          assert len(values) >= 2 and all(math.isfinite(v) and v > 0 for v in values), \
+              f"JMH rawData incomplete: {values}"
+          print(f"Java OK: {results[0].get('benchmark')} -> {len(values)} observations "
+                f"({primary.get('scoreUnit')}) (shared-runner timing — not performance data)")
+          PY
+
+      # ---- Python (pyperf) ---------------------------------------------------
+      - name: "Python runner: verification sidecar + one tiny pyperf job"
+        run: |
+          CB_VARIANT=merge_sort CB_DATASET=random_int CB_SIZE=1000 CB_SEED=7 \
+            PYTHONHASHSEED=0 CB_VERIFY_OUT=/tmp/python-verify.json \
+            python3 engines/python/codebench_bench.py \
+              -o /tmp/python-out.json \
+              -p 1 -n 2 -w 0 --min-time 0.02 \
+              --inherit-environ CB_VARIANT,CB_DATASET,CB_SIZE,CB_SEED,PYTHONHASHSEED
+
+          python3 - <<'PY'
+          import json
+          import math
+
+          with open("/tmp/python-verify.json") as f:
+              verify = json.load(f)
+          assert verify.get("input") and verify.get("output") and verify.get("cases"), \
+              f"Python verification sidecar incomplete: {verify}"
+
+          with open("/tmp/python-out.json") as f:
+              out = json.load(f)
+          values = [
+              v
+              for b in out.get("benchmarks", [])
+              for r in b.get("runs", [])
+              for v in (r.get("values") or [])
+          ]
+          assert len(values) >= 2 and all(math.isfinite(v) and v > 0 for v in values), \
+              f"pyperf values incomplete: {values}"
+          print(f"Python OK: {len(values)} pyperf values (s/op): "
+                f"{[round(v, 6) for v in values]} (shared-runner timing — not performance data)")
+          PY
+
+      - name: Timing disclaimer in the job summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Benchmark smoke — read this before looking at any number
+
+          This workflow only proves that the three runners (C++ / Google
+          Benchmark, Java / JMH, Python / pyperf) launch, execute the fixed
+          tiny workload (merge_sort, random_int, size 1000, seed 7), write
+          their FNV-1a verification sidecars and emit well-formed result JSON.
+
+          ### Timings from shared runners are NOT performance data
+
+          GitHub-hosted runners have virtualized CPUs, unpredictable
+          neighbouring load and no frequency pinning, so their timing is not
+          authoritative. Do not record, chart or compare the numbers produced
+          here. For real measurements, run CodeBench on a controlled machine,
+          keep the raw observations, and compare runs through the platform's
+          own regression view — see docs/BENCHMARK_METHODOLOGY.md (Persian:
+          docs/fa/BENCHMARK_METHODOLOGY_FA.md).
+          EOF

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 360" font-family="ui-monospace, 'Cascadia Code', Menlo, monospace">
+  <!-- CodeBench — AI layer boundaries (original diagram) -->
+  <defs>
+    <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2fbf71"/>
+    </marker>
+  </defs>
+  <rect width="980" height="360" fill="#111310"/>
+  <text x="24" y="34" fill="#f5a623" font-size="15" letter-spacing="3">LOCAL AI ASSISTANT — EVIDENCE BOUNDARIES</text>
+  <text x="24" y="52" fill="#8b8f85" font-size="10">the AI layer interprets measurements; it can never create, edit or overwrite them</text>
+
+  <!-- authoritative data -->
+  <rect x="40" y="80" width="300" height="250" rx="8" fill="#1a1d18" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="60" y="106" fill="#f5a623" font-size="12">AUTHORITATIVE DATA (SQLite)</text>
+  <text x="60" y="130" fill="#c9cdc2" font-size="10">▸ raw observations (ns/op)</text>
+  <text x="60" y="150" fill="#c9cdc2" font-size="10">▸ computed statistics</text>
+  <text x="60" y="170" fill="#c9cdc2" font-size="10">▸ verification checksums</text>
+  <text x="60" y="190" fill="#c9cdc2" font-size="10">▸ environment snapshots</text>
+  <text x="60" y="210" fill="#c9cdc2" font-size="10">▸ run logs, errors, warnings</text>
+  <text x="60" y="240" fill="#8b8f85" font-size="9">written exclusively by the benchmark</text>
+  <text x="60" y="256" fill="#8b8f85" font-size="9">engines and the deterministic</text>
+  <text x="60" y="272" fill="#8b8f85" font-size="9">statistics module</text>
+
+  <!-- evidence payload -->
+  <rect x="420" y="80" width="260" height="180" rx="8" fill="#15170f" stroke="#2fbf71" stroke-dasharray="6 3"/>
+  <text x="438" y="106" fill="#2fbf71" font-size="11">EVIDENCE PAYLOAD (read-only)</text>
+  <text x="438" y="130" fill="#c9cdc2" font-size="10">per-result stats + verification</text>
+  <text x="438" y="148" fill="#c9cdc2" font-size="10">config + environment summary</text>
+  <text x="438" y="166" fill="#c9cdc2" font-size="10">failures with reasons</text>
+  <text x="438" y="196" fill="#8b8f85" font-size="9">nothing else leaves the database:</text>
+  <text x="438" y="212" fill="#8b8f85" font-size="9">no source code, no filesystem paths,</text>
+  <text x="438" y="228" fill="#8b8f85" font-size="9">no unrelated runs</text>
+
+  <path d="M 340 170 L 418 170" fill="none" stroke="#2fbf71" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+  <!-- provider -->
+  <rect x="740" y="80" width="210" height="180" rx="8" fill="#1a1d18" stroke="#3a3d36"/>
+  <text x="756" y="106" fill="#c9cdc2" font-size="11">PROVIDER (optional)</text>
+  <text x="756" y="132" fill="#f5a623" font-size="10">z-ai SDK (server-side)</text>
+  <text x="756" y="152" fill="#2fbf71" font-size="10">Ollama (local models)</text>
+  <text x="756" y="172" fill="#8b8f85" font-size="10">disabled — everything still works</text>
+  <text x="756" y="200" fill="#8b8f85" font-size="9">strict system prompt:</text>
+  <text x="756" y="216" fill="#8b8f85" font-size="9">no invented numbers, no universal</text>
+  <text x="756" y="232" fill="#8b8f85" font-size="9">language rankings</text>
+
+  <path d="M 680 170 L 738 170" fill="none" stroke="#2fbf71" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+  <!-- validation -->
+  <rect x="420" y="290" width="530" height="40" rx="6" fill="#1a1d18" stroke="#f0576b"/>
+  <text x="436" y="307" fill="#f0576b" font-size="10">structured-output validation (zod) + grounding checks</text>
+  <text x="436" y="322" fill="#8b8f85" font-size="9">unknown variant references or foreign run ids ⇒ analysis REJECTED, stored as failed</text>
+
+  <path d="M 845 260 L 845 288" fill="none" stroke="#f0576b" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <path d="M 480 290 C 400 290 380 200 342 170" fill="none" stroke="#f5a623" stroke-width="1" opacity="0.4"/>
+
+  <text x="40" y="345" fill="#5c6057" font-size="9">AI analyses are stored in a separate table and displayed as interpretation · CodeBench © 2026 Parsa Fathi · Apache-2.0</text>
+</svg>

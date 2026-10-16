@@ -1,0 +1,193 @@
+# CodeBench — continuous integration
+#
+# Four independent jobs (they run in parallel; none depends on another):
+#   lint             — eslint over the web app / coordinator / scripts
+#   web-build        — Prisma client + SQLite schema push + Next.js production build
+#   crosslang-verify — the cross-language correctness gate (the primary test of
+#                      this repository: a timing number from an engine that fails
+#                      it is not a measurement — see docs/BENCHMARK_METHODOLOGY.md)
+#   python-tests     — standalone check of the Python engine verification phase
+#
+# Heavy toolchain pieces are provisioned inline per job, mirroring the engine
+# setup steps documented in docs/DEVELOPMENT.md: pip cmake+pyperf, Temurin
+# JDK 21 via the Adoptium API, and a Google Benchmark v1.9.4 build. The JMH
+# jars are committed under engines/java/lib, so the Java engine needs only
+# a JDK.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "ci-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (eslint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+  web-build:
+    name: Web app production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # throwaway SQLite database for the build; a real env var overrides the
+      # committed .env, and the schema is pushed to it before the build
+      DATABASE_URL: "file:/tmp/ci.db"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      - name: Push SQLite schema
+        run: bunx prisma db push
+
+      - name: "Production build (Next.js, output: standalone)"
+        run: bun run build
+
+  crosslang-verify:
+    name: Cross-language correctness gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # scripts/verify-crosslang.ts and the engine wrappers resolve the JDK
+      # through CODEBENCH_JDK_HOME (default /home/z/.jdk exists only in the
+      # original sandbox — CI must always set it)
+      CODEBENCH_JDK_HOME: "${{ runner.temp }}/jdk-21"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up bun (runs the TypeScript gate script)
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Python (provides pip; cmake comes from pip)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cmake + pyperf
+        run: python3 -m pip install cmake pyperf
+
+      - name: Install Temurin JDK 21 (Adoptium API)
+        run: |
+          mkdir -p "$CODEBENCH_JDK_HOME"
+          curl -sL --max-time 300 -o /tmp/jdk21.tar.gz \
+            "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"
+          tar -xzf /tmp/jdk21.tar.gz -C "$CODEBENCH_JDK_HOME" --strip-components=1
+          "$CODEBENCH_JDK_HOME/bin/javac" -version
+
+      - name: Build Google Benchmark v1.9.4
+        run: |
+          mkdir -p .cache/benchdeps
+          git clone --depth 1 --branch v1.9.4 https://github.com/google/benchmark.git .cache/benchdeps/benchmark
+          cmake -S .cache/benchdeps/benchmark -B .cache/benchdeps/benchmark/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBENCHMARK_ENABLE_TESTING=OFF \
+            -DBENCHMARK_ENABLE_GTEST_TESTS=OFF \
+            -DBENCHMARK_ENABLE_WERROR=OFF \
+            -DBENCHMARK_USE_LIBCXX=OFF
+          cmake --build .cache/benchdeps/benchmark/build -j"$(nproc)"
+          test -f .cache/benchdeps/benchmark/build/src/libbenchmark.a
+
+      - name: Compile C++ engine
+        run: |
+          mkdir -p .cache/bin
+          g++ -std=c++20 -O2 \
+            -I .cache/benchdeps/benchmark/include \
+            engines/cpp/codebench.cpp \
+            .cache/benchdeps/benchmark/build/src/libbenchmark.a \
+            -lpthread \
+            -o .cache/bin/codebench_cpp
+
+      - name: Compile Java engine (JMH jars are committed in engines/java/lib)
+        run: |
+          mkdir -p .cache/bin/java-classes
+          "$CODEBENCH_JDK_HOME/bin/javac" -proc:full \
+            -cp "engines/java/lib/jmh-core-1.37.jar:engines/java/lib/jmh-generator-annprocess-1.37.jar" \
+            -d .cache/bin/java-classes \
+            engines/java/src/codebench/*.java
+
+      - name: Run the cross-language verification gate
+        run: bun scripts/verify-crosslang.ts
+
+  python-tests:
+    name: Python engine verification (standalone)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Standalone check of the engine's verification phase (no pyperf needed
+      # for this part): engines/python/codebench_algorithms.py must produce
+      # non-empty fixed verify-case checksums and a canonical output checksum.
+      - name: Verify the Python engine checksum phase
+        run: |
+          python3 - <<'PY'
+          import re
+          import sys
+
+          sys.path.insert(0, "engines/python")
+          import codebench_algorithms as cb
+
+          hex16 = re.compile(r"^[0-9a-f]{16}$")
+
+          cases = cb.verify_cases("merge_sort")
+          assert isinstance(cases, dict) and cases, \
+              "verify_cases('merge_sort') returned no checksums"
+          for key, checksum in sorted(cases.items()):
+              assert hex16.fullmatch(checksum), \
+                  f"malformed checksum for {key}: {checksum!r}"
+
+          # canonical output checksum on a measured input (what the sidecar
+          # writes before any timing starts)
+          measured = cb.fnv1a_hex(cb.verify_output("merge_sort", "random_int", 257, 42))
+          assert hex16.fullmatch(measured), \
+              f"malformed canonical output checksum: {measured!r}"
+
+          # verify_cases must agree with a direct recomputation at VERIFY_SEED
+          expected = cb.fnv1a_hex(cb.verify_output("merge_sort", "random_int", 257, cb.VERIFY_SEED))
+          assert cases["random_int:257"] == expected, (
+              "verify_cases disagrees with direct recomputation: "
+              f"{cases['random_int:257']} != {expected}"
+          )
+
+          print(f"OK: verify_cases('merge_sort') -> {len(cases)} fixed-case checksums")
+          for key, checksum in sorted(cases.items()):
+              print(f"    {key}: {checksum}")
+          print(f"OK: canonical output checksum (random_int:257, seed 42): {measured}")
+          PY

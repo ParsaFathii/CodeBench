@@ -370,6 +370,9 @@ def make_op(w):
         n = SIZE
         if variant == "matmul_naive":
             def op():
+                for row in c:  # reset included in the measured op — identical contract in all languages
+                    for jj in range(n):
+                        row[jj] = 0
                 for i in range(n):
                     ai = a[i]
                     ci = c[i]
@@ -381,6 +384,9 @@ def make_op(w):
                 return c[0][0]
         else:
             def op():
+                for row in c:  # reset included in the measured op — identical contract in all languages
+                    for jj in range(n):
+                        row[jj] = 0
                 for i in range(n):
                     ai = a[i]
                     ci = c[i]

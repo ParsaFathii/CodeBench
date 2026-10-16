@@ -356,6 +356,7 @@ public class Benchmarks {
         int[] a = matrix.a;
         int[] b = matrix.b;
         long[] c = matrixOut;
+        Arrays.fill(c, 0L); // reset included in the measured op — identical contract in all languages
         for (int i = 0; i < n; i++)
             for (int jj = 0; jj < n; jj++) {
                 long s = 0;
@@ -371,6 +372,7 @@ public class Benchmarks {
         int[] a = matrix.a;
         int[] b = matrix.b;
         long[] c = matrixOut;
+        Arrays.fill(c, 0L); // reset included in the measured op — identical contract in all languages
         for (int i = 0; i < n; i++)
             for (int kk = 0; kk < n; kk++) {
                 long aik = a[i * n + kk];

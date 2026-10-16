@@ -1,0 +1,30 @@
+# CodeBench — Dependabot configuration
+#
+# Two dependency manifests exist in this repository:
+#   - package.json (+ bun.lock) for the web app, coordinator and scripts
+#   - .github/workflows/*.yml for the GitHub Actions versions
+#
+# There is no pip manifest to track: cmake and pyperf are documented as
+# developer toolchain prerequisites (docs/DEVELOPMENT.md), not pinned
+# dependencies, so no pip ecosystem is configured.
+
+version: 2
+updates:
+  # Web app / coordinator / scripts — bun-managed npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+    open-pull-requests-limit: 5
+
+  # GitHub Actions workflow and action versions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"
+    open-pull-requests-limit: 5

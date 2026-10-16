@@ -1,0 +1,121 @@
+# CodeBench — release packaging
+#
+# Runs on version tags matching v*. Builds the production web app (Next.js
+# standalone output), stages a dist folder containing:
+#   - the standalone server tarball produced by `bun run build`
+#   - the production build manifest (.next/required-server-files.json)
+#   - the engine sources (engines/cpp, engines/java/src, engines/python)
+#   - the committed JMH jars (engines/java/lib/*.jar)
+#   - the scripts (cross-language correctness gate + demo seeding)
+# generates SHA256SUMS over everything staged, and publishes a GitHub release
+# with the dist tarball and SHA256SUMS attached.
+#
+# The release is created with the official GitHub CLI (preinstalled on the
+# runner) using the built-in GITHUB_TOKEN — no third-party release action.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build + publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # required by `gh release create`
+    env:
+      # throwaway SQLite database for the build
+      DATABASE_URL: "file:/tmp/release.db"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      - name: Push SQLite schema
+        run: bunx prisma db push
+
+      - name: Production build (Next.js standalone)
+        run: bun run build
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Stage dist + generate SHA256SUMS
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          DIST="dist/codebench-${TAG}"
+          mkdir -p \
+            "${DIST}/engines/cpp" \
+            "${DIST}/engines/java/lib" \
+            "${DIST}/engines/java/src" \
+            "${DIST}/engines/python" \
+            "${DIST}/scripts" \
+            "${DIST}/build-manifests"
+
+          # [1] Next.js standalone server (next.config.ts sets output: "standalone";
+          #     the build script copies .next/static and public/ into it)
+          tar -czf "${DIST}/codebench-${TAG}-standalone.tar.gz" -C .next/standalone .
+
+          # [2] production build manifest (build config + emitted file list)
+          if [ -f .next/required-server-files.json ]; then
+            cp .next/required-server-files.json "${DIST}/build-manifests/"
+          elif [ -f .next/standalone/.next/required-server-files.json ]; then
+            cp .next/standalone/.next/required-server-files.json "${DIST}/build-manifests/"
+          else
+            echo "::error::production build manifest (required-server-files.json) not found"
+            exit 1
+          fi
+
+          # [3] engine sources — the exact measured code behind any future number
+          cp engines/cpp/codebench.cpp "${DIST}/engines/cpp/"
+          cp -r engines/java/src/codebench "${DIST}/engines/java/src/"
+          cp engines/java/lib/*.jar "${DIST}/engines/java/lib/"
+          cp engines/python/codebench_algorithms.py engines/python/codebench_bench.py "${DIST}/engines/python/"
+
+          # [4] scripts needed to reproduce the correctness gate and demo seeding
+          cp scripts/verify-crosslang.ts scripts/seed-demo-data.sh "${DIST}/scripts/"
+
+          # SHA256SUMS over everything staged (relative paths, verifiable with
+          # `sha256sum -c SHA256SUMS` from inside the dist folder)
+          (
+            cd "${DIST}"
+            find . -type f ! -name SHA256SUMS -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+
+          # single dist tarball for the release assets
+          tar -czf "dist/codebench-${TAG}-dist.tar.gz" -C dist "codebench-${TAG}"
+
+          {
+            echo "## Release ${TAG} — staged artifacts"
+            echo ""
+            echo '```'
+            cat "${DIST}/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub release (gh CLI + built-in token)
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "CodeBench ${TAG}" \
+            --generate-notes \
+            "dist/codebench-${TAG}-dist.tar.gz" \
+            "dist/codebench-${TAG}/SHA256SUMS"

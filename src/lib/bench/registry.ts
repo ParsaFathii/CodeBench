@@ -288,7 +288,7 @@ export const ALGORITHMS: AlgorithmSpec[] = [
     name: "Matrix multiplication",
     categoryGroup: "Matrix operations",
     description:
-      "C = A × B over n×n matrices of signed 32-bit integers in [-100, 100]. The result matrix is pre-allocated outside the measured op; every element is overwritten on each operation.",
+      "C = A × B over n×n matrices of signed 32-bit integers in [-100, 100]. The result matrix is pre-allocated outside the measured op and reset to zero at the start of every operation (identical contract in all languages).",
     datasets: ["bounded_matrix"],
     defaultDataset: "bounded_matrix",
     defaultSizes: [64, 128],

@@ -1,0 +1,85 @@
+# CodeBench — security scans
+#
+# codeql:            CodeQL analysis over the three supported analysis
+#                    languages (javascript-typescript = web app + coordinator,
+#                    java-kotlin = benchmark engine, python = benchmark engine;
+#                    the C++ engine is not covered by CodeQL here). Autobuild
+#                    is intentionally not used — each language gets the same
+#                    explicit build the platform itself uses (bun install for
+#                    the web app, javac + the committed JMH jars for the Java
+#                    engine; Python needs no build).
+# dependency-review: known-vulnerability / license check of dependency changes,
+#                    pull requests only.
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "security-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      # required by the CodeQL action to upload results
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript, java-kotlin, python
+
+      # ---- manual build steps (no autobuild action on purpose) -------------
+
+      # javascript-typescript: install dependencies so CodeQL can resolve
+      # the module graph of the web app / coordinator sources
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install web app dependencies (javascript-typescript)
+        run: bun install --frozen-lockfile
+
+      # java-kotlin: compile the engine sources exactly as the platform does
+      # (JMH jars are committed under engines/java/lib)
+      - name: Compile Java engine (java-kotlin)
+        run: |
+          mkdir -p .cache/bin/java-classes "$RUNNER_TEMP/jdk-21"
+          curl -sL --max-time 300 -o /tmp/jdk21.tar.gz \
+            "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse"
+          tar -xzf /tmp/jdk21.tar.gz -C "$RUNNER_TEMP/jdk-21" --strip-components=1
+          "$RUNNER_TEMP/jdk-21/bin/javac" -proc:full \
+            -cp "engines/java/lib/jmh-core-1.37.jar:engines/java/lib/jmh-generator-annprocess-1.37.jar" \
+            -d .cache/bin/java-classes \
+            engines/java/src/codebench/*.java
+
+      # python: source-only analysis, no build step needed
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
