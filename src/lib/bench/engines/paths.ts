@@ -45,20 +45,23 @@ export function javaClasspath(includeClasses = true): string {
 }
 
 // ---------------------------------------------------------------------------
-// Host tool probing with caching (first successful capture is reused)
+// Host tool probing with TTL cache (re-probes at most once every 30 s so
+// newly installed toolchains are picked up without a server restart)
 // ---------------------------------------------------------------------------
 
-const toolCache = new Map<string, string>();
+const PROBE_TTL_MS = 30_000;
+const toolCache = new Map<string, { value: string | null; at: number }>();
 
 export async function probeTool(command: string, args: string[], key: string): Promise<string | null> {
-  if (toolCache.has(key)) return toolCache.get(key)!;
+  const hit = toolCache.get(key);
+  if (hit && Date.now() - hit.at < PROBE_TTL_MS) return hit.value;
   try {
     const { stdout, stderr } = await execFileAsync(command, args, { timeout: 10_000 });
     const out = (stdout + stderr).trim().split("\n")[0].trim();
-    toolCache.set(key, out || null);
-    return out;
+    toolCache.set(key, { value: out || null, at: Date.now() });
+    return out || null;
   } catch {
-    toolCache.set(key, "");
+    toolCache.set(key, { value: null, at: Date.now() });
     return null;
   }
 }

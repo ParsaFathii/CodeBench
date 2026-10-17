@@ -171,8 +171,16 @@ function extractJson(text: string): unknown {
 
 /** Grounding check: every variant key mentioned in the analysis must exist in the run. */
 function checkGrounding(output: AiAnalysisOutput, evidence: EvidencePayload): string[] {
-  const knownKeys = new Set(evidence.results.map((r) => r.variantKey));
-  const knownLangs = new Set(evidence.results.map((r) => r.language));
+  // Accept both the full dotted key ("sorting.merge_sort") and the bare
+  // variant/algorithm id ("merge_sort", "sorting") — the model may mention
+  // either form, and both unambiguously identify in-run variants.
+  const knownKeys = new Set<string>();
+  for (const r of evidence.results) {
+    const [algoId, variantId] = r.variantKey.split(".");
+    knownKeys.add(r.variantKey);
+    if (variantId) knownKeys.add(variantId);
+    if (algoId) knownKeys.add(algoId);
+  }
   const problems: string[] = [];
   const allText = [
     output.summary,
@@ -190,7 +198,6 @@ function checkGrounding(output: AiAnalysisOutput, evidence: EvidencePayload): st
   for (const rid of output.supporting_run_ids) {
     if (rid !== evidence.runId) problems.push(`references run id "${rid}" which was not analyzed`);
   }
-  void knownLangs;
   return problems;
 }
 
